@@ -1,0 +1,272 @@
+# Importação dos pacotes
+import pandas as pd
+from fpdf import FPDF
+import gspread
+from datetime import datetime
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.application import MIMEApplication
+import smtplib
+from email.mime.base import MIMEBase
+from email import encoders
+import traceback
+import schedule
+from datetime import datetime, timedelta
+import os
+import time
+
+#Criação de classe para cabeçalho e rodapé
+class MyPDF(FPDF):
+    def header(self):
+        self.set_xy(10, 10)
+        # Adicione a imagem ao cabeçalho (ajuste a posição e o tamanho conforme necessário)
+        imagem_cabecalho = (
+            "endereço da LOGO"
+        )
+        self.image(imagem_cabecalho, 10, 10, 70)  # Posição e tamanho da imagem
+        # Título centralizado
+        self.set_font("Arial", "B", 12)
+        self.cell(0, 40, "QUADRO DE REFERÊNCIA PROVISÓRIA - QRP", 0, 1, "C")
+        self.ln(10)  # Quebra de linha após o cabeçalho
+
+    def footer(self):
+        self.set_y(-15)
+        self.set_font("Arial", "I", 8)
+        data_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.cell(0, 10, f"Emissor:Gerência emissora - Data: {data_atual}", 0, 0, "R") #Neste caso, o datetime está sendo utilizado para a geração da data e hora do momento do envio dos dados.
+
+
+# Autenticação e obtenção de dados do Google Sheets
+scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+gc = gspread.service_account(
+    filename="caminho.json" #arquivo json
+)
+pse_arquivo = gc.open_by_key("planilha ID")
+worksheet = pse_arquivo.worksheet("Nome da aba")
+pse_plan = worksheet.get_all_values()
+dfpse = pd.DataFrame(pse_plan)
+dfpse.columns = dfpse.iloc[0]
+dfpse = dfpse[1:]
+
+
+ultima_linha = dfpse.iloc[-1]
+# Criação do PDF
+pdf = MyPDF()
+pdf.add_page()
+pdf.set_font("Arial", "B", size=12)
+
+# Largura da página e margens
+largura_pagina = 350
+altura_pagina = 300
+margem_esquerda = 10
+margem_direita = 5
+margem_superior = 35
+margem_inferior = 20
+
+pdf.set_xy(margem_esquerda, 40)
+
+# Defina as larguras das células
+label_width = 70
+value_width = 110
+description_width = 160
+cell_height = 10
+
+# Será gerado pdf para o código QRP mais recente
+codigo_qrp_mais_recente = dfpse["NumeroQRP"].max()
+linhas_qrp = dfpse[dfpse["NumeroQRP"] == codigo_qrp_mais_recente]
+
+#Função para criar o PDF
+def criarPDF(linhas_qrp, QRP):
+    for index, row in linhas_qrp.iterrows():
+        
+        data = row.to_dict()
+
+        
+        
+        
+        # # Adiciona dados ao PDF
+        #     for index, row in data.iterrows():
+        # data = row.to_dict()
+        description_added = False
+        itinerary_added = False
+        schedule_change_added = False
+        stop_changes_added = False
+        observacao_added = False
+        destinatario_added = False
+        referencia_added = False
+
+        for key, value in data.items():
+            if key in [
+                "Descrição",
+                "Referência",
+                "Alteração do itinerário",
+                "Alteração no quadro de horário",
+                "Alteração nos pontos de embarque e desembarque",
+                "Observação",
+                "Destinatário",
+            ]:
+                pdf.set_fill_color(255, 255, 255)
+                pdf.set_xy(pdf.get_x(), pdf.get_y())
+
+                if key == "Descrição":
+                    cell_content = "Descrição: " + str(value)
+                    description_added = True
+                elif key == "Alteração do itinerário":
+                    cell_content = "Alteração do itinerário: " + str(value)
+                    itinerary_added = True
+                elif key == "Alteração no quadro de horário":
+                    cell_content = "Alteração no quadro de horário: " + str(value)
+                    schedule_change_added = True
+                elif key == "Observação":
+                    cell_content = "Observação: " + str(value)
+                    observacao_added = True
+                elif key == "Destinatário":
+                    cell_content = "Destinatários: " + str(value)
+                    destinatario_added = True
+                elif key == "Referência":
+                    cell_content = "Referência: " + str(value)
+                    referencia_added = True
+                else:
+                    cell_content = (
+                        "Alteração nos pontos de embarque e desembarque: " + str(value)
+                    )
+                    stop_changes_added = True
+
+                pdf.multi_cell(
+                    (description_width + 20), cell_height, cell_content, 1, "L", 1
+                )
+            else:
+                pdf.set_fill_color(240, 240, 240)
+                pdf.set_xy(pdf.get_x(), pdf.get_y())
+                pdf.cell(label_width, cell_height, key, 1, 0, "L", 1)
+                pdf.cell(value_width, cell_height, str(value), 1, 1, "L", 1)
+
+        if not description_added:
+            pdf.set_fill_color(255, 255, 255)
+            pdf.set_xy(pdf.get_x(), pdf.get_y())
+            pdf.multi_cell(description_width, cell_height, "Descrição: ", 1, "L", 1)
+        if not itinerary_added:
+            pdf.set_fill_color(255, 255, 255)
+            pdf.set_xy(pdf.get_x(), pdf.get_y())
+            pdf.multi_cell(
+                description_width, cell_height, "Alteração do itinerário: ", 1, "L", 1
+            )
+        if not schedule_change_added:
+            pdf.set_fill_color(255, 255, 255)
+            pdf.set_xy(pdf.get_x(), pdf.get_y())
+            pdf.multi_cell(
+                description_width,
+                cell_height,
+                "Alteração no quadro de horário: ",
+                1,
+                "L",
+                1,
+            )
+        if not stop_changes_added:
+            pdf.set_fill_color(255, 255, 255)
+            pdf.set_xy(pdf.get_x(), pdf.get_y())
+            pdf.multi_cell(
+                description_width,
+                cell_height,
+                "Alteração nos pontos de embarque e desembarque: ",
+                1,
+                "L",
+                1,
+            )
+            if data["NumeroQRP"] == "":
+                break
+        pdf.footer()
+
+        pdf.set_xy(margem_esquerda, margem_superior)
+        pdf.ln()
+        pdf.header()
+
+        pdf.add_page()
+        pdf.set_xy(margem_esquerda, margem_superior)
+    
+
+
+        # Restante do seu código para adicionar conteúdo ao PDF
+    pdf.output(QRP)
+    return QRP
+
+
+def tarefa():
+    max_attempts = 5
+
+    for attempt in range(max_attempts):
+        try:
+            scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+            gc = gspread.service_account(
+                filename="C:caminho/gestor.json"
+            )
+            pse_arquivo = gc.open_by_key("ID da planilha")
+            worksheet = pse_arquivo.worksheet("nome da aba")
+            pse_plan = worksheet.get_all_values()
+            break  # Sai do loop se a planilha foi carregada com sucesso
+
+        except gspread.exceptions.APIError as e:
+            print(f"Tentativa {attempt+1} de {max_attempts}")
+            print("Erro ao conectar à API:", e)
+
+        if attempt < max_attempts - 1:
+            print("Tentando novamente...")
+        else:
+            print(
+                "Número máximo de tentativas alcançado. Não foi possível carregar a planilha."
+            )
+            break
+# Esse código é importante, pois caso haja falha no servidor, será reconectado a planilha.
+
+
+def enviar_email(subject, to, body, files):
+    print(f"Enviando PDF {files}")
+    msg = MIMEMultipart()
+    msg["Subject"] = subject
+    msg["From"] = "email"
+    msg["To"] = ", ".join(to)
+    password = "Senha"
+    msg.attach(MIMEText(body, "html"))
+
+    with open(files, "rb") as fil:
+        part = MIMEApplication(fil.read(), Name=os.path.basename(files))
+    part["Content-Disposition"] = 'attachment; filename="%s"' % os.path.basename(files)
+    msg.attach(part)
+
+    s = smtplib.SMTP("smtp.gmail.com:587")
+    s.starttls()
+    s.login(msg["From"], password)
+    s.sendmail(msg["From"], [msg["To"]], msg.as_string().encode("utf-8"))
+    print("Email enviado")
+
+
+assinatura = """
+                    """
+mensagem = f"""<p>Prezado (a)</p>
+                    <p> Segue o PDF gerado do QRP cadastrado.</p>
+                            <p>Atenciosamente,</p>:
+                            <p> {assinatura}.</p>
+            """
+
+for index, row in linhas_qrp.iterrows():
+    destinatarios = ["inserir e-mails", "inserir e-mails"]
+    pdf_filename = "Quadro de referência Provisória.pdf"
+    pdf_file_path = criarPDF(linhas_qrp, pdf_filename)
+    agora = datetime.now()
+    hora_envio = agora - timedelta(minutes=30)
+    if (agora - hora_envio).total_seconds() <= 1800:
+        for destinatario in destinatarios:
+            print(destinatario)
+            # pdf = cria_PDFLinha1(i, df_pse)
+            enviar_email("QRP", [destinatario], mensagem, pdf_file_path)
+
+
+
+# print(f"PDF gerado com sucesso. Caminho do arquivo: {caminho_pdf}")
+schedule.every(3).minutes.do(tarefa)
+tarefa()
+while True:
+    schedule.run_pending()
+    time.sleep(1)
+
+#Schedule para automatização
